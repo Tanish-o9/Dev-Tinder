@@ -3,75 +3,73 @@ const validator = require("validator");
 const user = require("../models/user");
 const authRouter = express.Router();
 const bcrypt = require("bcrypt");
-const { validateSignUpData } = require("../utils/validation");
+const { validateSignUpData, normalizeProfileData } = require("../utils/validation");
+const { getProfileCompletion, getProfileSuggestions } = require("../utils/profileCompletion");
+
+const serializeUser = (userDocument) => {
+  const profile = userDocument.toJSON();
+  return { ...profile, profileCompletion: getProfileCompletion(profile).score, profileSuggestions: getProfileSuggestions(profile) };
+};
+
+// Cookie lifetime matches JWT expiry (5 days)
+const COOKIE_MAX_AGE_MS = 5 * 24 * 60 * 60 * 1000;
+
+const setAuthCookie = (res, token) => {
+  res.cookie("token", token, {
+    httpOnly: true,
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    secure: process.env.NODE_ENV === "production",
+    expires: new Date(Date.now() + COOKIE_MAX_AGE_MS),
+  });
+};
+
 authRouter.post("/signup", async (req, res) => {
   try {
-    //Validation of req body initially
+    normalizeProfileData(req.body);
+    if (typeof req.body.emailId === "string") {
+      req.body.emailId = req.body.emailId.trim().toLowerCase();
+    }
     validateSignUpData(req);
-
-    //fter validation is passed then "already existing account" check is done
     const doUserExist = await user.findOne({ emailId: req.body.emailId });
     if (doUserExist)
-      res.status(409).send("User already registered. Please log in instead!!");
-
-    //if all validation passes successfully then password is encrypted
+      return res.status(409).json({ message: "User already registered. Please log in instead" });
     const { password } = req.body;
     const passwordEncrypted = await bcrypt.hash(password, 10);
-
-    // Now creating new instance of model user
-    const User = new user({
-      ...req.body,
-      password: passwordEncrypted,
-    });
+    const User = new user({ ...req.body, password: passwordEncrypted });
     const savedUser = await User.save();
-    const jwtToken = savedUser.getJWT(); //Using Schema methods
-
-    res.cookie("token", jwtToken, {
-      expires: new Date(Date.now() + 6 * 3600000),
-    });
-    res
-      .status(200)
-      .json({ message: "User registered successfully", data: savedUser });
+    const jwtToken = savedUser.getJWT();
+    setAuthCookie(res, jwtToken);
+    res.status(201).json({ message: "User registered successfully", data: serializeUser(savedUser) });
   } catch (error) {
-    res.status(400).send("ERROR: " + error.message);
+    res.status(400).json({ message: error.message });
   }
 });
 
 authRouter.post("/login", async (req, res) => {
   try {
-    const { emailId, password } = req.body;
-    if (!validator.isEmail(emailId)) throw new Error("Invalid Email!!!");
+    const emailId = req.body.emailId?.trim().toLowerCase();
+    const { password } = req.body;
+    if (!emailId || !password) return res.status(400).json({ message: "Email and password are required" });
+    if (!validator.isEmail(emailId)) return res.status(400).json({ message: "Invalid email" });
     const UserPresent = await user.findOne({ emailId });
-    // console.log(isUserPresent);
-    if (!UserPresent) throw new Error("Invalid credentials");
-    // const passwordCheck = await bcrypt.compare(password, UserPresent.password);
+    if (!UserPresent) return res.status(401).json({ message: "Invalid credentials" });
     const isPasswordCorrect = await UserPresent.validatePassword(password);
-
-    if (!isPasswordCorrect) throw new Error("Invalid credentials");
-
-    //Creating JSON web token(JWT)
-
-    // const jwtToken = jwt.sign({ _id: isUserPresent._id }, "aDish@123", {
-    //   expiresIn: "5d",
-    // }); //Second parameter is SECRETKEY.. & first one is hidden userId
-
-    //The above one is perfectly fine but for more industry specific the below format is as follows:-
-    const jwtToken = UserPresent.getJWT(); //Using Schema methods
-
-    //Now inserting the created token into cookie
-    res.cookie("token", jwtToken, {
-      expires: new Date(Date.now() + 6 * 3600000),
-    });
-    res
-      .status(200)
-      .json({ message: "User loggedIn successfully", data: UserPresent });
+    if (!isPasswordCorrect) return res.status(401).json({ message: "Invalid credentials" });
+    const jwtToken = UserPresent.getJWT();
+    setAuthCookie(res, jwtToken);
+    res.status(200).json({ message: "User loggedIn successfully", data: serializeUser(UserPresent) });
   } catch (error) {
-    res.status(400).send("Error : " + error.message);
+    res.status(500).json({ message: "Login failed" });
   }
 });
 
 authRouter.post("/logout", (req, res) => {
-  res.cookie("token", null, { expires: new Date(Date.now()) });
-  res.send("Logged out successfully!!");
+  res.clearCookie("token", {
+    httpOnly: true,
+    sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
+  res.json({ message: "Logged out successfully" });
 });
+
 module.exports = authRouter;

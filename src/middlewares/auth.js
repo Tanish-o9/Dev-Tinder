@@ -2,17 +2,16 @@ const jwt = require("jsonwebtoken");
 const user = require("../models/user");
 const authMiddle = async (req, res, next) => {
   try {
-    //Token validation
     const { token } = req.cookies;
-    if (!token) return res.status(401).send("Please Login!");
-    const verifyJWT = jwt.verify(token, process.env.JWT_SECRET);
-    const { _id } = verifyJWT;
+    if (!token) return res.status(401).json({ message: "Authentication required" });
+    const { _id } = jwt.verify(token, process.env.JWT_SECRET);
     const findUser = await user.findById(_id);
-    if (!findUser) throw new Error("User not found!!");
+    if (!findUser) return res.status(401).json({ message: "Session expired, please log in again" });
     req.user = findUser;
     next();
   } catch (error) {
-    res.status(400).send("ERROR : " + error.message);
+    const isJwtError = error.name === "JsonWebTokenError" || error.name === "TokenExpiredError";
+    res.status(isJwtError ? 401 : 400).json({ message: isJwtError ? "Session expired, please log in again" : error.message });
   }
 };
 module.exports = { authMiddle };

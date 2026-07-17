@@ -1,115 +1,53 @@
-require("dotenv").config();
+const path = require("path");
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+const http = require("http");
 const express = require("express");
-// const jwt = require("jsonwebtoken");
-const app = express();
-const connectDB = require("./config/database");
 const cookieParser = require("cookie-parser");
 const cors = require("cors");
 
+const connectDB = require("./config/database");
+const { attachSocket } = require("./socket");
+
 require("./utils/cronjob");
 
-// // app.use("/test", (req, res) => res.send("We r here for testing"));
-// // app.use("/hello", (req, res) => res.send("Hello Dude"));
-// app.use("/admin", authMiddle);
-// app.get("/admin", (req, res, next) => {
-//   res.send("Hiiiiii");
-// });
+const app = express();
+const server = http.createServer(app);
 
-// app.get(
-//   "/user",
-//   (req, res, next) => {
-//     console.log("first");
-//     // res.send("JEIi");
-//     next();
-//   },
-//   (req, res, next) => {
-//     res.send("Second");
-//   }
-// );
+const allowedOrigins = (process.env.CLIENT_URL || "http://localhost:5173")
+  .split(",")
+  .map((o) => o.trim());
 
-// middlewares
-app.use(
-  cors({
-    origin: "http://localhost:5173",
-    // origin: "http://51.20.7.213",
-    credentials: true,
-  })
-);
+// ── Middleware ───────────────────────────────────────────────────────────────
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error("Origin not allowed by CORS"));
+  },
+  credentials: true,
+}));
 app.use(express.json());
 app.use(cookieParser());
 
-const authRouter = require("./routes/auth");
-const profileRouter = require("./routes/profile");
-const requestRouter = require("./routes/request");
-const userRouter = require("./routes/user");
+// ── Routes ───────────────────────────────────────────────────────────────────
+app.use("/", require("./routes/auth"));
+app.use("/profile", require("./routes/profile"));
+app.use("/", require("./routes/request"));
+app.use("/", require("./routes/user"));
+app.use("/chat", require("./routes/chat"));
+app.use("/", require("./routes/project"));
+app.use("/", require("./routes/notification"));
 
-app.use("/", authRouter);
-app.use("/profile", profileRouter);
-app.use("/", requestRouter);
-app.use("/", userRouter);
+// ── Socket.IO ────────────────────────────────────────────────────────────────
+attachSocket(server, allowedOrigins);
 
-// // Get user by email
-// app.get("/user", async (req, res) => {
-//   try {
-//     const reqEmail = req.body.emailId;
-//     const users = await user.find({ emailId: reqEmail });
-//     if (users.length) res.send(users);
-//     else res.status(404).send("User not found");
-//   } catch (error) {
-//     res.status(400).send("Something went wrong");
-//   }
-// });
-
-// //Feed API - GET /feed - get all the users from the database
-// app.get("/feed", async (req, res) => {
-//   try {
-//     const users = await user.find();
-//     res.status(200).send(users);
-//   } catch (error) {
-//     res.status(400).send("Something went wrong");
-//   }
-// });
-
-// //Delete user from db
-// app.delete("/user", async (req, res) => {
-//   try {
-//     const userId = req.body.userID;
-//     await user.findByIdAndDelete(userId);
-//     res.status(200).send("User deleted successfully");
-//   } catch (error) {
-//     res.status(400).send("Something went wrong");
-//   }
-// });
-
-// //Update user in db
-// app.patch("/user/:userId", async (req, res) => {
-//   try {
-//     // const userId = req.body.userID;
-//     // const email = req.body.emailId;
-//     const data = req.body;
-//     const userId = req.params?.userId;
-//     const allowed_updates = ["age", "password", "firstName", "lastName"];
-//     const isUpdateAllowed = Object.keys(data).every((k) =>
-//       allowed_updates.includes(k)
-//     );
-//     if (!isUpdateAllowed) res.status(400).send("Update not allowed");
-//     await user.findByIdAndUpdate(userId, data, {
-//       runValidators: true,
-//     });
-//     // await user.findOneAndUpdate({ emailId: email }, data, {
-//     //   runValidators: true,
-//     // });
-//     res.status(200).send("User updated successfully");
-//   } catch (error) {
-//     res.status(400).send("Update failed: " + error.message);
-//   }
-// });
-
+// ── Start ────────────────────────────────────────────────────────────────────
 connectDB()
   .then(() => {
     console.log("Database connection established....");
-    app.listen(process.env.PORT, () =>
+    server.listen(process.env.PORT, () =>
       console.log(`Server started listening on port ${process.env.PORT}....`)
     );
   })
-  .catch((err) => console.log("Database cannot be connected!!🥲"));
+  .catch((err) => {
+    console.error("Database connection failed:", err.message);
+  });
